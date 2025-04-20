@@ -102,10 +102,7 @@ pub async fn endpoint(
                     {
                         Ok(quote) => quote,
                         Err(err) => {
-                            if err
-                                .as_db_error()
-                                .is_some_and(|db_error| *db_error.code() == SqlState::NO_DATA)
-                            {
+                            if format!("{err:?}").eq("Error { kind: RowCount, cause: None }") {
                                 return bot
                                     .send_message(msg.chat.id, "No Quotes found.")
                                     .reply_to(msg.clone())
@@ -138,10 +135,7 @@ pub async fn endpoint(
                     {
                         Ok(quote) => quote,
                         Err(err) => {
-                            if err
-                                .as_db_error()
-                                .is_some_and(|db_error| *db_error.code() == SqlState::NO_DATA)
-                            {
+                            if format!("{err:?}").eq("Error { kind: RowCount, cause: None }") {
                                 return bot
                                     .send_message(msg.chat.id, "No Quotes found.")
                                     .reply_to(msg.clone())
@@ -167,10 +161,7 @@ pub async fn endpoint(
             {
                 Ok(quote) => quote,
                 Err(err) => {
-                    if err
-                        .as_db_error()
-                        .is_some_and(|db_error| *db_error.code() == SqlState::NO_DATA)
-                    {
+                    if format!("{err:?}").eq("Error { kind: RowCount, cause: None }") {
                         return bot
                             .send_message(msg.chat.id, "No Quotes found.")
                             .reply_to(msg)

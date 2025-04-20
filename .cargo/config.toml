@@ -1,0 +1,13 @@
+[build]
+rustflags = [
+"-C", 
+# Improves performance while sacrificing compatibility
+#"target-cpu=native",
+
+#Pick one of the two following options, prefer mold if available
+#"link-arg=-fuse-ld=lld",
+"link-arg=-fuse-ld=mold",
+
+#"-Zshare-generics=y",
+#"-Zthreads=0",
+]

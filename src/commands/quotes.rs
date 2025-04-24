@@ -89,7 +89,7 @@ pub async fn endpoint(
                     .await
                     .map(|_| ());
             } else if terms.len() == 1 && terms[0].starts_with('@') {
-                if let Some(user) = msg.mentioned_users().next() {
+                if let Some(user) = msg.mentioned_users().find(|user| !user.is_bot) {
                     let quote = match db::queries::quotes::quote_from_user()
                         .bind(
                             &client,
@@ -121,7 +121,7 @@ pub async fn endpoint(
                     return send_quote(&client, bot, quote, &msg).await;
                 }
             } else if terms[0].starts_with('@') {
-                if let Some(user) = msg.mentioned_users().next() {
+                if let Some(user) = msg.mentioned_users().find(|user| !user.is_bot) {
                     let quote = match db::queries::quotes::search_quote_from_user()
                         .bind(
                             &client,

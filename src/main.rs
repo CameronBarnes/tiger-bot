@@ -6,9 +6,12 @@ use db::{
     deadpool_postgres::{Config as DBConfig, CreatePoolError, Pool},
     tokio_postgres::NoTls,
 };
-use teloxide::{prelude::*, update_listeners::webhooks, utils::command::BotCommands};
+use teloxide::{
+    prelude::*, types::UpdateKind, update_listeners::webhooks, utils::command::BotCommands,
+};
 use tracing::{info, warn};
 
+mod callbacks;
 mod commands;
 mod config;
 #[allow(clippy::disallowed_types)]
@@ -59,7 +62,22 @@ pub async fn main() {
     Dispatcher::builder(bot, handler)
         .dependencies(dptree::deps![pool])
         .default_handler(|update| async move {
-            warn!("Unhandled update: {update:?}");
+            match update.kind.clone() {
+                UpdateKind::Message(message) => {
+                    if message.reply_to_message().is_none() {
+                        warn!("Unhandled update: {update:?}");
+                    }
+                }
+                // UpdateKind::InlineQuery(inline_query) => {
+                // }
+                // UpdateKind::ChosenInlineResult(chosen_inline_result) => {
+                // }
+                // UpdateKind::CallbackQuery(callback_query) => {
+                // }
+                _ => {
+                    warn!("Unhandled update: {update:#?}");
+                }
+            }
         })
         .enable_ctrlc_handler()
         .build()

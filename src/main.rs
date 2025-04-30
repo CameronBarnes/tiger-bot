@@ -6,9 +6,7 @@ use db::{
     deadpool_postgres::{Config as DBConfig, CreatePoolError, Pool},
     tokio_postgres::NoTls,
 };
-use teloxide::{
-    prelude::*, update_listeners::webhooks, utils::command::BotCommands,
-};
+use teloxide::{prelude::*, update_listeners::webhooks, utils::command::BotCommands};
 use tracing::info;
 
 mod callbacks;
@@ -61,6 +59,8 @@ pub async fn main() {
 
     Dispatcher::builder(bot, handler)
         .dependencies(dptree::deps![pool])
+        // We dont want to get warnings for the unhandled updates, as there will be a lot
+        .default_handler(async move |_| {})
         .enable_ctrlc_handler()
         .build()
         .dispatch_with_listener(listener, LoggingErrorHandler::new())

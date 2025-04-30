@@ -9,7 +9,7 @@ pub mod quotes;
 #[derive(BotCommands, Clone, Copy)]
 #[command(rename_rule = "lowercase")]
 pub enum GeneralCommand {
-    #[command(description = "Prints this help text")]
+    #[command(description = "Prints command descriptions")]
     Help,
 }
 

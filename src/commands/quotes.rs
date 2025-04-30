@@ -44,10 +44,12 @@ pub async fn endpoint(
     };
     match cmd {
         Command::Quote => {
+            // The quote command needs a replied to message to quote
             let text = if let Some(quote) = msg.reply_to_message() {
                 // warn!("{quote:#?}");
                 if let Some(from) = &msg.from {
                     if let Some(quote_from) = &quote.from {
+                        // The quote must have a valid user object and not be from a channel
                         if quote_from.is_bot {
                             String::from("Cant quote a bot's messages.")
                         } else if quote_from.is_telegram()
@@ -58,9 +60,12 @@ pub async fn endpoint(
                         } else {
                             let res = add_quote(&client, quote, from).await;
                             if let Err(err) = &res {
+                                // If the quote was already added, we're going to handle this
+                                // seperately
                                 if err.as_db_error().is_some_and(|db_error| {
                                     *db_error.code() == SqlState::UNIQUE_VIOLATION
                                 }) {
+                                    // Try to tell the user who quoted it the first time
                                     if let Ok(quote) = db::queries::quotes::get_quote()
                                         .bind(&client, &quote.id.0)
                                         .one()

@@ -7,9 +7,9 @@ use db::{
     tokio_postgres::NoTls,
 };
 use teloxide::{
-    prelude::*, types::UpdateKind, update_listeners::webhooks, utils::command::BotCommands,
+    prelude::*, update_listeners::webhooks, utils::command::BotCommands,
 };
-use tracing::{info, warn};
+use tracing::info;
 
 mod callbacks;
 mod commands;
@@ -61,24 +61,6 @@ pub async fn main() {
 
     Dispatcher::builder(bot, handler)
         .dependencies(dptree::deps![pool])
-        .default_handler(|update| async move {
-            match update.kind.clone() {
-                UpdateKind::Message(message) => {
-                    if message.reply_to_message().is_none() {
-                        warn!("Unhandled update: {update:?}");
-                    }
-                }
-                // UpdateKind::InlineQuery(inline_query) => {
-                // }
-                // UpdateKind::ChosenInlineResult(chosen_inline_result) => {
-                // }
-                // UpdateKind::CallbackQuery(callback_query) => {
-                // }
-                _ => {
-                    warn!("Unhandled update: {update:#?}");
-                }
-            }
-        })
         .enable_ctrlc_handler()
         .build()
         .dispatch_with_listener(listener, LoggingErrorHandler::new())

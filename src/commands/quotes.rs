@@ -45,10 +45,16 @@ pub async fn endpoint(
     match cmd {
         Command::Quote => {
             let text = if let Some(quote) = msg.reply_to_message() {
+                // warn!("{quote:#?}");
                 if let Some(from) = &msg.from {
                     if let Some(quote_from) = &quote.from {
                         if quote_from.is_bot {
-                            String::from("Cant quote a bot's messages")
+                            String::from("Cant quote a bot's messages.")
+                        } else if quote_from.is_telegram()
+                            || quote_from.is_channel()
+                            || quote_from.is_anonymous()
+                        {
+                            String::from("Cant quote a channel's messages.")
                         } else {
                             let res = add_quote(&client, quote, from).await;
                             if let Err(err) = &res {
@@ -73,6 +79,7 @@ pub async fn endpoint(
                     String::from("Channels cant quote messages")
                 }
             } else {
+                // warn!("No reply found for msg: {msg:#?}");
                 String::from("Must be used as a reply to a message to quote.")
             };
             bot.send_message(msg.chat.id, text)
@@ -83,8 +90,10 @@ pub async fn endpoint(
         Command::SearchQuote => {
             let terms = msg.text().unwrap().split_whitespace().skip(1).collect_vec();
             if terms.is_empty() {
+                // Searching by @ currently doesnt work due to limitations with telegram
+                // There are some unpleasant workarounds, we'll try those later
                 return bot
-                    .send_message(msg.chat.id, "Must provide an @ or text to search by")
+                    .send_message(msg.chat.id, "Must provide text to search by")
                     .reply_to(msg)
                     .await
                     .map(|_| ());
@@ -507,7 +516,7 @@ pub async fn add_quote(
         quote_user.id.0,
         quote_user
             .username
-            .expect("User should always have a username"),
+            .unwrap_or_else(|| quoter.full_name().clone()),
     )
     .await;
     crate::utils::set_username(
@@ -516,7 +525,7 @@ pub async fn add_quote(
         quoter
             .username
             .clone()
-            .expect("User should always have a username"),
+            .unwrap_or_else(|| quoter.full_name().clone()),
     )
     .await;
     db::queries::quotes::add_quote()

@@ -516,6 +516,38 @@ impl RandomQuoteStmt {
         }
     }
 }
+pub fn get_quote() -> GetQuoteStmt {
+    GetQuoteStmt(crate::client::async_::Stmt::new(
+        "SELECT user_from, chat_id, quoted_by, msg_type, msg_date, has_spoiler, text, file_id FROM quotes WHERE msg_id = ($1)",
+    ))
+}
+pub struct GetQuoteStmt(crate::client::async_::Stmt);
+impl GetQuoteStmt {
+    pub fn bind<'c, 'a, 's, C: GenericClient>(
+        &'s mut self,
+        client: &'c C,
+        msg_id: &'a i32,
+    ) -> QuoteQuery<'c, 'a, 's, C, Quote, 1> {
+        QuoteQuery {
+            client,
+            params: [msg_id],
+            stmt: &mut self.0,
+            extractor: |row: &tokio_postgres::Row| -> Result<QuoteBorrowed, tokio_postgres::Error> {
+                Ok(QuoteBorrowed {
+                    user_from: row.try_get(0)?,
+                    chat_id: row.try_get(1)?,
+                    quoted_by: row.try_get(2)?,
+                    msg_type: row.try_get(3)?,
+                    msg_date: row.try_get(4)?,
+                    has_spoiler: row.try_get(5)?,
+                    text: row.try_get(6)?,
+                    file_id: row.try_get(7)?,
+                })
+            },
+            mapper: |it| Quote::from(it),
+        }
+    }
+}
 pub fn number_of_quotes() -> NumberOfQuotesStmt {
     NumberOfQuotesStmt(crate::client::async_::Stmt::new(
         "SELECT COUNT(*) FROM quotes WHERE chat_id = ($1)",

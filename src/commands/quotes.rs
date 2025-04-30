@@ -61,7 +61,31 @@ pub async fn endpoint(
                                 if err.as_db_error().is_some_and(|db_error| {
                                     *db_error.code() == SqlState::UNIQUE_VIOLATION
                                 }) {
-                                    String::from("Quote Already Exists")
+                                    if let Ok(quote) = db::queries::quotes::get_quote()
+                                        .bind(&client, &quote.id.0)
+                                        .one()
+                                        .await
+                                    {
+                                        if let Some(id) = quote.quoted_by.to_u64() {
+                                            if let Some(user_from) = get_username(&client, id).await
+                                            {
+                                                format!(
+                                                    "Quote Already exists. {user_from} beat you to it."
+                                                )
+                                            } else {
+                                                error!("Failed to get username for user: {id}");
+                                                String::from("Quote Already Exists")
+                                            }
+                                        } else {
+                                            error!(
+                                                "Failed to convert decimal to u64: {:?}",
+                                                quote.quoted_by
+                                            );
+                                            String::from("Quote Already Exists")
+                                        }
+                                    } else {
+                                        String::from("Quote Already Exists")
+                                    }
                                 } else {
                                     error!("Failed to add quote with error: {err:?}");
                                     String::from("Failed to add quote. Sorry")

@@ -1,7 +1,7 @@
 use db::{
     deadpool_postgres::{Object, Pool},
     queries::quotes::Quote,
-    tokio_postgres::error::SqlState,
+    tokio_postgres::{self, error::SqlState},
     types::QuoteType,
 };
 use itertools::Itertools;
@@ -15,6 +15,41 @@ use teloxide::{
 use tracing::{error, warn};
 
 use crate::utils::get_username;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum QuoteError {
+    #[error("Request to Telegram failed with error: {0:?}")]
+    TeloxideRequest(teloxide::RequestError),
+    #[error("Telegram Data is Missing a FileID for message: {0:?}")]
+    TGMissingFileID(Message),
+    #[error("Database Error: {0:?}")]
+    Database(tokio_postgres::error::Error),
+    #[error("Database Unique Violation: {0:?}")]
+    DatabaseUniqueViolation(tokio_postgres::error::Error),
+    #[error("No Results from Database: {0:?}")]
+    DatabaseNoResults(tokio_postgres::error::Error),
+}
+
+impl From<tokio_postgres::error::Error> for QuoteError {
+    fn from(err: tokio_postgres::error::Error) -> Self {
+        if err
+            .as_db_error()
+            .is_some_and(|db_error| *db_error.code() == SqlState::UNIQUE_VIOLATION)
+        {
+            Self::DatabaseUniqueViolation(err)
+        } else if format!("{err:?}").eq("Error { kind: RowCount, cause: None }") {
+            Self::DatabaseNoResults(err)
+        } else {
+            Self::Database(err)
+        }
+    }
+}
+
+impl From<teloxide::RequestError> for QuoteError {
+    fn from(err: teloxide::RequestError) -> Self {
+        Self::TeloxideRequest(err)
+    }
+}
 
 #[derive(BotCommands, Clone, Copy)]
 #[command(rename_rule = "lowercase")]
@@ -43,296 +78,341 @@ pub async fn endpoint(
         }
     };
     match cmd {
-        Command::Quote => {
-            // The quote command needs a replied to message to quote
-            let text = if let Some(quote) = msg.reply_to_message() {
-                // warn!("{quote:#?}");
-                if let Some(from) = &msg.from {
-                    if let Some(quote_from) = &quote.from {
-                        // The quote must have a valid user object and not be from a channel
-                        if quote_from.is_bot {
-                            String::from("Cant quote a bot's messages.")
-                        } else if quote_from.is_telegram()
-                            || quote_from.is_channel()
-                            || quote_from.is_anonymous()
+        Command::Quote => quote(&client, msg, bot).await,
+        Command::SearchQuote => search_quote(&client, msg, bot).await,
+        Command::QuoteRankings => get_quote_statistics(&client, msg, bot).await,
+        Command::RandomQuote => get_random_quote(&client, msg, bot).await,
+    }
+}
+
+async fn quote(client: &Object, msg: Message, bot: Bot) -> Result<(), teloxide::RequestError> {
+    // The quote command needs a replied to message to quote
+    let text = if let Some(quote) = msg.reply_to_message() {
+        // warn!("{quote:#?}");
+        if let Some(from) = &msg.from {
+            if let Some(quote_from) = &quote.from {
+                // The quote must have a valid user object and not be from a channel
+                if quote_from.is_bot {
+                    String::from("Cant quote a bot's messages.")
+                } else if quote_from.is_telegram()
+                    || quote_from.is_channel()
+                    || quote_from.is_anonymous()
+                {
+                    String::from("Cant quote a channel's messages.")
+                } else {
+                    let res = add_quote(client, quote, from).await;
+                    if let Err(err) = &res {
+                        // If the quote was already added, we're going to handle this
+                        // seperately
+                        if err
+                            .as_db_error()
+                            .is_some_and(|db_error| *db_error.code() == SqlState::UNIQUE_VIOLATION)
                         {
-                            String::from("Cant quote a channel's messages.")
-                        } else {
-                            let res = add_quote(&client, quote, from).await;
-                            if let Err(err) = &res {
-                                // If the quote was already added, we're going to handle this
-                                // seperately
-                                if err.as_db_error().is_some_and(|db_error| {
-                                    *db_error.code() == SqlState::UNIQUE_VIOLATION
-                                }) {
-                                    // Try to tell the user who quoted it the first time
-                                    if let Ok(quote) = db::queries::quotes::get_quote()
-                                        .bind(&client, &quote.id.0)
-                                        .one()
-                                        .await
-                                    {
-                                        if let Some(id) = quote.quoted_by.to_u64() {
-                                            if let Some(user_from) = get_username(&client, id).await
-                                            {
-                                                format!(
-                                                    "Quote Already exists. {user_from} beat you to it."
-                                                )
-                                            } else {
-                                                error!("Failed to get username for user: {id}");
-                                                String::from("Quote Already Exists")
-                                            }
-                                        } else {
-                                            error!(
-                                                "Failed to convert decimal to u64: {:?}",
-                                                quote.quoted_by
-                                            );
-                                            String::from("Quote Already Exists")
-                                        }
+                            // Try to tell the user who quoted it the first time
+                            if let Ok(quote) = db::queries::quotes::get_quote()
+                                .bind(client, &quote.id.0)
+                                .one()
+                                .await
+                            {
+                                if let Some(id) = quote.quoted_by.to_u64() {
+                                    if let Some(user_from) = get_username(client, id).await {
+                                        format!("Quote Already exists. {user_from} beat you to it.")
                                     } else {
+                                        error!("Failed to get username for user: {id}");
                                         String::from("Quote Already Exists")
                                     }
                                 } else {
-                                    error!("Failed to add quote with error: {err:?}");
-                                    String::from("Failed to add quote. Sorry")
+                                    error!(
+                                        "Failed to convert decimal to u64: {:?}",
+                                        quote.quoted_by
+                                    );
+                                    String::from("Quote Already Exists")
                                 }
-                            } else if res.is_ok_and(|num| num != 0) {
-                                String::from("Quote Added")
                             } else {
-                                String::from("Not a valid message type to quote")
+                                String::from("Quote Already Exists")
                             }
+                        } else {
+                            error!("Failed to add quote with error: {err:?}");
+                            String::from("Failed to add quote. Sorry")
                         }
+                    } else if res.is_ok_and(|num| num != 0) {
+                        String::from("Quote Added")
                     } else {
-                        String::from("Cant quote messages from a group or channel.")
+                        String::from("Not a valid message type to quote")
                     }
-                } else {
-                    String::from("Channels cant quote messages")
                 }
             } else {
-                // warn!("No reply found for msg: {msg:#?}");
-                String::from("Must be used as a reply to a message to quote.")
-            };
-            bot.send_message(msg.chat.id, text)
-                .reply_to(msg)
-                .await
-                .map(|_| ())
-        }
-        Command::SearchQuote => {
-            let terms = msg.text().unwrap().split_whitespace().skip(1).collect_vec();
-            if terms.is_empty() {
-                // Searching by @ currently doesnt work due to limitations with telegram
-                // There are some unpleasant workarounds, we'll try those later
-                return bot
-                    .send_message(msg.chat.id, "Must provide text to search by")
-                    .reply_to(msg)
-                    .await
-                    .map(|_| ());
-            } else if terms.len() == 1 && terms[0].starts_with('@') {
-                if let Some(user) = msg.mentioned_users().find(|user| !user.is_bot) {
-                    let quote = match db::queries::quotes::quote_from_user()
-                        .bind(
-                            &client,
-                            &msg.chat.id.0,
-                            &Decimal::from_u64(user.id.0)
-                                .expect("Failed to convert u64 to Decimal"),
-                        )
-                        .one()
-                        .await
-                    {
-                        Ok(quote) => quote,
-                        Err(err) => {
-                            if format!("{err:?}").eq("Error { kind: RowCount, cause: None }") {
-                                return bot
-                                    .send_message(msg.chat.id, "No Quotes found.")
-                                    .reply_to(msg.clone())
-                                    .await
-                                    .map(|_| ());
-                            } else {
-                                error!("Failed to get quote with error: {err:?}");
-                                return bot
-                                    .send_message(msg.chat.id, "Failed to get quote, sorry.")
-                                    .reply_to(msg.clone())
-                                    .await
-                                    .map(|_| ());
-                            }
-                        }
-                    };
-                    return send_quote(&client, bot, quote, &msg).await;
-                }
-            } else if terms[0].starts_with('@') {
-                if let Some(user) = msg.mentioned_users().find(|user| !user.is_bot) {
-                    let quote = match db::queries::quotes::search_quote_from_user()
-                        .bind(
-                            &client,
-                            &msg.chat.id.0,
-                            &Decimal::from_u64(user.id.0)
-                                .expect("Failed to convert u64 to Decimal"),
-                            &terms.iter().skip(1).join(" & "),
-                        )
-                        .one()
-                        .await
-                    {
-                        Ok(quote) => quote,
-                        Err(err) => {
-                            if format!("{err:?}").eq("Error { kind: RowCount, cause: None }") {
-                                return bot
-                                    .send_message(msg.chat.id, "No Quotes found.")
-                                    .reply_to(msg.clone())
-                                    .await
-                                    .map(|_| ());
-                            } else {
-                                error!("Failed to get quote with error: {err:?}");
-                                return bot
-                                    .send_message(msg.chat.id, "Failed to get quote, sorry.")
-                                    .reply_to(msg.clone())
-                                    .await
-                                    .map(|_| ());
-                            }
-                        }
-                    };
-                    return send_quote(&client, bot, quote, &msg).await;
-                }
+                String::from("Cant quote messages from a group or channel.")
             }
-            let quote = match db::queries::quotes::search_quote()
-                .bind(&client, &msg.chat.id.0, &terms.join(" & "))
+        } else {
+            String::from("Channels cant quote messages")
+        }
+    } else {
+        // warn!("No reply found for msg: {msg:#?}");
+        String::from("Must be used as a reply to a message to quote.")
+    };
+    bot.send_message(msg.chat.id, text)
+        .reply_to(msg)
+        .await
+        .map(|_| ())
+}
+
+async fn search_quote(
+    client: &Object,
+    msg: Message,
+    bot: Bot,
+) -> Result<(), teloxide::RequestError> {
+    let terms = msg.text().unwrap().split_whitespace().skip(1).collect_vec();
+    if terms.is_empty() {
+        // Searching by @ currently doesnt work due to limitations with telegram
+        // There are some unpleasant workarounds, we'll try those later
+        return bot
+            .send_message(msg.chat.id, "Must provide text to search by")
+            .reply_to(msg)
+            .await
+            .map(|_| ());
+    } else if terms.len() == 1 && terms[0].starts_with('@') {
+        if let Some(user) = msg.mentioned_users().find(|user| !user.is_bot) {
+            return match db::queries::quotes::quote_from_user()
+                .bind(
+                    client,
+                    &msg.chat.id.0,
+                    &Decimal::from_u64(user.id.0).expect("Failed to convert u64 to Decimal"),
+                )
                 .one()
                 .await
+                .map_err(std::convert::Into::<QuoteError>::into)
+                .map(|quote| send_quote(client, bot.clone(), quote, &msg))
             {
-                Ok(quote) => quote,
-                Err(err) => {
-                    if format!("{err:?}").eq("Error { kind: RowCount, cause: None }") {
-                        return bot
-                            .send_message(msg.chat.id, "No Quotes found.")
-                            .reply_to(msg)
-                            .await
-                            .map(|_| ());
-                    } else {
-                        error!("Failed to get quote with error: {err:?}");
-                        return bot
-                            .send_message(msg.chat.id, "Failed to get quote, sorry.")
-                            .reply_to(msg)
-                            .await
-                            .map(|_| ());
+                Ok(_) => Ok(()),
+                Err(err) => match err {
+                    QuoteError::TeloxideRequest(request_error) => {
+                        error!(
+                            "Failed to send a quote to the user with teloxide error: {request_error:?}"
+                        );
+                        Err(request_error)
                     }
-                }
-            };
-            send_quote(&client, bot, quote, &msg).await
-        }
-        Command::QuoteRankings => {
-            let chat_id = msg.chat.id.0;
-            let total_count = match db::queries::quotes::number_of_quotes()
-                .bind(&client, &chat_id)
-                .one()
-                .await
-            {
-                Ok(count) => count,
-                Err(err) => {
-                    error!("Failed to get total quote count with err: {err:?}");
-                    return bot
-                        .send_message(msg.chat.id, "Failed to get quote rankings")
-                        .reply_to(msg)
+                    QuoteError::DatabaseNoResults(_) => bot
+                        .send_message(msg.chat.id, String::from("No Quotes in this Chat yet."))
+                        .reply_to(msg.clone())
                         .await
-                        .map(|_| ());
-                }
-            };
-            if total_count == 0 {
-                return bot
-                    .send_message(msg.chat.id, "0 Quoted Messages in this Chat")
-                    .reply_to(msg)
-                    .await
-                    .map(|_| ());
-            }
-            let most_quoted = match db::queries::quotes::most_quoted()
-                .bind(&client, &chat_id)
-                .all()
-                .await
-            {
-                Ok(most_quoted) => most_quoted,
-                Err(err) => {
-                    error!("Failed to get total quote count with err: {err:?}");
-                    return bot
-                        .send_message(msg.chat.id, "Failed to get quote rankings")
-                        .reply_to(msg)
-                        .await
-                        .map(|_| ());
-                }
-            };
-            let quoted_by = match db::queries::quotes::most_quoted_by()
-                .bind(&client, &chat_id)
-                .all()
-                .await
-            {
-                Ok(quoted_by) => quoted_by,
-                Err(err) => {
-                    error!("Failed to get total quote count with err: {err:?}");
-                    return bot
-                        .send_message(msg.chat.id, "Failed to get quote rankings")
-                        .reply_to(msg)
-                        .await
-                        .map(|_| ());
-                }
-            };
-            let mut text = format!(
-                "<b>Overall:</b>\n • {total_count} Total Quotes\n\n<b>Users With the Most Quotes:</b>\n"
-            );
-            for val in most_quoted {
-                let username = get_username(
-                    &client,
-                    val.user_from
-                        .to_u64()
-                        .expect("Failed to convert from Decimal to u64"),
-                )
-                .await
-                .unwrap_or_else(|| val.user_from.to_string());
-                let percentage =
-                    ((((val.count as f64) / (total_count as f64)) * 1000.) as u64) as f64 / 10.;
-                text.push_str(&format!(" • {} ({percentage}%): {username}\n", val.count));
-            }
-            text.push_str("\n<b>Users Who Add the Most Quotes:</b>\n");
-            for val in quoted_by {
-                let username = get_username(
-                    &client,
-                    val.quoted_by
-                        .to_u64()
-                        .expect("Failed to convert from Decimal to u64"),
-                )
-                .await
-                .unwrap_or_else(|| val.quoted_by.to_string());
-                let percentage =
-                    ((((val.count as f64) / (total_count as f64)) * 1000.) as u64) as f64 / 10.;
-                text.push_str(&format!(" • {} ({percentage}%): {username}\n", val.count));
-            }
-            bot.send_message(msg.chat.id, text)
-                .reply_to(msg)
-                .parse_mode(teloxide::types::ParseMode::Html)
-                .await
-                .map(|_| ())
-        }
-        Command::RandomQuote => {
-            match db::queries::quotes::random_quote()
-                .bind(&client, &msg.chat.id.0)
-                .one()
-                .await
-            {
-                Ok(quote) => send_quote(&client, bot.clone(), quote, &msg).await,
-                Err(err) => {
-                    if format!("{err:?}").eq("Error { kind: RowCount, cause: None }") {
-                        bot.send_message(msg.chat.id, String::from("No Quotes in this Chat yet."))
-                            .reply_to(msg)
-                            .await
-                            .map(|_| ())
-                    } else {
+                        .map(|_| ()),
+                    err => {
                         error!("Failed to get random quote with error: {err:?}");
                         bot.send_message(
                             msg.chat.id,
                             String::from("Failed to get random quote. Sorry"),
                         )
-                        .reply_to(msg)
+                        .reply_to(msg.clone())
                         .await
                         .map(|_| ())
                     }
-                }
-            }
+                },
+            };
         }
+    } else if terms[0].starts_with('@') {
+        if let Some(user) = msg.mentioned_users().find(|user| !user.is_bot) {
+            return match db::queries::quotes::search_quote_from_user()
+                .bind(
+                    client,
+                    &msg.chat.id.0,
+                    &Decimal::from_u64(user.id.0).expect("Failed to convert u64 to Decimal"),
+                    &terms.iter().skip(1).join(" & "),
+                )
+                .one()
+                .await
+                .map_err(std::convert::Into::<QuoteError>::into)
+                .map(|quote| send_quote(client, bot.clone(), quote, &msg))
+            {
+                Ok(_) => Ok(()),
+                Err(err) => match err {
+                    QuoteError::TeloxideRequest(request_error) => {
+                        error!(
+                            "Failed to send a quote to the user with teloxide error: {request_error:?}"
+                        );
+                        Err(request_error)
+                    }
+                    QuoteError::DatabaseNoResults(_) => bot
+                        .send_message(msg.chat.id, String::from("No Quotes in this Chat yet."))
+                        .reply_to(msg.clone())
+                        .await
+                        .map(|_| ()),
+                    err => {
+                        error!("Failed to get random quote with error: {err:?}");
+                        bot.send_message(
+                            msg.chat.id,
+                            String::from("Failed to get random quote. Sorry"),
+                        )
+                        .reply_to(msg.clone())
+                        .await
+                        .map(|_| ())
+                    }
+                },
+            };
+        }
+    }
+
+    match db::queries::quotes::search_quote()
+        .bind(client, &msg.chat.id.0, &terms.join(" & "))
+        .one()
+        .await
+        .map_err(std::convert::Into::<QuoteError>::into)
+        .map(|quote| send_quote(client, bot.clone(), quote, &msg))
+    {
+        Ok(_) => Ok(()),
+        Err(err) => match err {
+            QuoteError::TeloxideRequest(request_error) => {
+                error!("Failed to send a quote to the user with teloxide error: {request_error:?}");
+                Err(request_error)
+            }
+            QuoteError::DatabaseNoResults(_) => bot
+                .send_message(msg.chat.id, String::from("No Quotes in this Chat yet."))
+                .reply_to(msg.clone())
+                .await
+                .map(|_| ()),
+            err => {
+                error!("Failed to get random quote with error: {err:?}");
+                bot.send_message(
+                    msg.chat.id,
+                    String::from("Failed to get random quote. Sorry"),
+                )
+                .reply_to(msg.clone())
+                .await
+                .map(|_| ())
+            }
+        },
+    }
+}
+
+async fn get_quote_statistics(
+    client: &Object,
+    msg: Message,
+    bot: Bot,
+) -> Result<(), teloxide::RequestError> {
+    let chat_id = msg.chat.id.0;
+    let total_count = match db::queries::quotes::number_of_quotes()
+        .bind(client, &chat_id)
+        .one()
+        .await
+    {
+        Ok(count) => count,
+        Err(err) => {
+            error!("Failed to get total quote count with err: {err:?}");
+            return bot
+                .send_message(msg.chat.id, "Failed to get quote rankings")
+                .reply_to(msg)
+                .await
+                .map(|_| ());
+        }
+    };
+    if total_count == 0 {
+        return bot
+            .send_message(msg.chat.id, "0 Quoted Messages in this Chat")
+            .reply_to(msg)
+            .await
+            .map(|_| ());
+    }
+    let most_quoted = match db::queries::quotes::most_quoted()
+        .bind(client, &chat_id)
+        .all()
+        .await
+    {
+        Ok(most_quoted) => most_quoted,
+        Err(err) => {
+            error!("Failed to get total quote count with err: {err:?}");
+            return bot
+                .send_message(msg.chat.id, "Failed to get quote rankings")
+                .reply_to(msg)
+                .await
+                .map(|_| ());
+        }
+    };
+    let quoted_by = match db::queries::quotes::most_quoted_by()
+        .bind(client, &chat_id)
+        .all()
+        .await
+    {
+        Ok(quoted_by) => quoted_by,
+        Err(err) => {
+            error!("Failed to get total quote count with err: {err:?}");
+            return bot
+                .send_message(msg.chat.id, "Failed to get quote rankings")
+                .reply_to(msg)
+                .await
+                .map(|_| ());
+        }
+    };
+    let mut text = format!(
+        "<b>Overall:</b>\n • {total_count} Total Quotes\n\n<b>Users With the Most Quotes:</b>\n"
+    );
+    for val in most_quoted {
+        let username = get_username(
+            client,
+            val.user_from
+                .to_u64()
+                .expect("Failed to convert from Decimal to u64"),
+        )
+        .await
+        .unwrap_or_else(|| val.user_from.to_string());
+        let percentage =
+            ((((val.count as f64) / (total_count as f64)) * 1000.) as u64) as f64 / 10.;
+        text.push_str(&format!(" • {} ({percentage}%): {username}\n", val.count));
+    }
+    text.push_str("\n<b>Users Who Add the Most Quotes:</b>\n");
+    for val in quoted_by {
+        let username = get_username(
+            client,
+            val.quoted_by
+                .to_u64()
+                .expect("Failed to convert from Decimal to u64"),
+        )
+        .await
+        .unwrap_or_else(|| val.quoted_by.to_string());
+        let percentage =
+            ((((val.count as f64) / (total_count as f64)) * 1000.) as u64) as f64 / 10.;
+        text.push_str(&format!(" • {} ({percentage}%): {username}\n", val.count));
+    }
+    bot.send_message(msg.chat.id, text)
+        .reply_to(msg)
+        .parse_mode(teloxide::types::ParseMode::Html)
+        .await
+        .map(|_| ())
+}
+
+async fn get_random_quote(
+    client: &Object,
+    msg: Message,
+    bot: Bot,
+) -> Result<(), teloxide::RequestError> {
+    match db::queries::quotes::random_quote()
+        .bind(client, &msg.chat.id.0)
+        .one()
+        .await
+        .map_err(std::convert::Into::<QuoteError>::into)
+        .map(|quote| send_quote(client, bot.clone(), quote, &msg))
+    {
+        Ok(_) => Ok(()),
+        Err(err) => match err {
+            QuoteError::TeloxideRequest(request_error) => {
+                error!("Failed to send a quote to the user with teloxide error: {request_error:?}");
+                Err(request_error)
+            }
+            QuoteError::DatabaseNoResults(_) => bot
+                .send_message(msg.chat.id, String::from("No Quotes in this Chat yet."))
+                .reply_to(msg.clone())
+                .await
+                .map(|_| ()),
+            err => {
+                error!("Failed to get random quote with error: {err:?}");
+                bot.send_message(
+                    msg.chat.id,
+                    String::from("Failed to get random quote. Sorry"),
+                )
+                .reply_to(msg.clone())
+                .await
+                .map(|_| ())
+            }
+        },
     }
 }
 
@@ -341,7 +421,7 @@ pub async fn send_quote(
     bot: Bot,
     quote: Quote,
     msg: &Message,
-) -> Result<(), teloxide::RequestError> {
+) -> Result<(), QuoteError> {
     match quote.msg_type {
         QuoteType::Text => {
             let username = get_username(
@@ -366,6 +446,7 @@ pub async fn send_quote(
                 .reply_to(msg)
                 .await
                 .map(|_| ())
+                .map_err(|err| err.into())
         }
         QuoteType::Document => {
             let username = get_username(
@@ -391,13 +472,14 @@ pub async fn send_quote(
                 InputFile::file_id(
                     quote
                         .file_id
-                        .expect("Document quotes should have a fild ID"),
+                        .ok_or(QuoteError::TGMissingFileID(msg.clone()))?,
                 ),
             )
             .caption(text)
             .reply_to(msg)
             .await
             .map(|_| ())
+            .map_err(|err| err.into())
         }
         QuoteType::Photo => {
             let username = get_username(
@@ -420,13 +502,18 @@ pub async fn send_quote(
             };
             bot.send_photo(
                 msg.chat.id,
-                InputFile::file_id(quote.file_id.expect("Photo quotes should have a fild ID")),
+                InputFile::file_id(
+                    quote
+                        .file_id
+                        .ok_or(QuoteError::TGMissingFileID(msg.clone()))?,
+                ),
             )
             .caption(text)
             .reply_to(msg)
             .has_spoiler(quote.has_spoiler)
             .await
             .map(|_| ())
+            .map_err(|err| err.into())
         }
         QuoteType::Video => {
             let username = get_username(
@@ -449,13 +536,18 @@ pub async fn send_quote(
             };
             bot.send_video(
                 msg.chat.id,
-                InputFile::file_id(quote.file_id.expect("Video quotes should have a fild ID")),
+                InputFile::file_id(
+                    quote
+                        .file_id
+                        .ok_or(QuoteError::TGMissingFileID(msg.clone()))?,
+                ),
             )
             .caption(text)
             .reply_to(msg)
             .has_spoiler(quote.has_spoiler)
             .await
             .map(|_| ())
+            .map_err(|err| err.into())
         }
         QuoteType::Voice => {
             let username = get_username(
@@ -478,12 +570,17 @@ pub async fn send_quote(
             };
             bot.send_voice(
                 msg.chat.id,
-                InputFile::file_id(quote.file_id.expect("Voice quotes should have a fild ID")),
+                InputFile::file_id(
+                    quote
+                        .file_id
+                        .ok_or(QuoteError::TGMissingFileID(msg.clone()))?,
+                ),
             )
             .caption(text)
             .reply_to(msg)
             .await
             .map(|_| ())
+            .map_err(|err| err.into())
         }
     }
 }

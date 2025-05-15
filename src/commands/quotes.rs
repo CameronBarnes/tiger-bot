@@ -21,7 +21,7 @@ pub(crate) enum QuoteError {
     #[error("Request to Telegram failed with error: {0:?}")]
     TeloxideRequest(teloxide::RequestError),
     #[error("Telegram Data is Missing a FileID for message: {0:?}")]
-    TGMissingFileID(Message),
+    TGMissingFileID(Box<Message>),
     #[error("Database Error: {0:?}")]
     Database(tokio_postgres::error::Error),
     #[error("Database Unique Violation: {0:?}")]
@@ -173,7 +173,7 @@ async fn search_quote(
             .map(|_| ());
     } else if terms.len() == 1 && terms[0].starts_with('@') {
         if let Some(user) = msg.mentioned_users().find(|user| !user.is_bot) {
-            return match db::queries::quotes::quote_from_user()
+            let result = match db::queries::quotes::quote_from_user()
                 .bind(
                     client,
                     &msg.chat.id.0,
@@ -181,9 +181,11 @@ async fn search_quote(
                 )
                 .one()
                 .await
-                .map_err(std::convert::Into::<QuoteError>::into)
-                .map(|quote| send_quote(client, bot.clone(), quote, &msg))
             {
+                Ok(quote) => send_quote(client, bot.clone(), quote, &msg).await,
+                Err(err) => Err(QuoteError::from(err)),
+            };
+            return match result {
                 Ok(_) => Ok(()),
                 Err(err) => match err {
                     QuoteError::TeloxideRequest(request_error) => {
@@ -212,7 +214,7 @@ async fn search_quote(
         }
     } else if terms[0].starts_with('@') {
         if let Some(user) = msg.mentioned_users().find(|user| !user.is_bot) {
-            return match db::queries::quotes::search_quote_from_user()
+            let result = match db::queries::quotes::search_quote_from_user()
                 .bind(
                     client,
                     &msg.chat.id.0,
@@ -221,9 +223,11 @@ async fn search_quote(
                 )
                 .one()
                 .await
-                .map_err(std::convert::Into::<QuoteError>::into)
-                .map(|quote| send_quote(client, bot.clone(), quote, &msg))
             {
+                Ok(quote) => send_quote(client, bot.clone(), quote, &msg).await,
+                Err(err) => Err(QuoteError::from(err)),
+            };
+            return match result {
                 Ok(_) => Ok(()),
                 Err(err) => match err {
                     QuoteError::TeloxideRequest(request_error) => {
@@ -252,13 +256,15 @@ async fn search_quote(
         }
     }
 
-    match db::queries::quotes::search_quote()
+    let result = match db::queries::quotes::search_quote()
         .bind(client, &msg.chat.id.0, &terms.join(" & "))
         .one()
         .await
-        .map_err(std::convert::Into::<QuoteError>::into)
-        .map(|quote| send_quote(client, bot.clone(), quote, &msg))
     {
+        Ok(quote) => send_quote(client, bot.clone(), quote, &msg).await,
+        Err(err) => Err(QuoteError::from(err)),
+    };
+    match result {
         Ok(_) => Ok(()),
         Err(err) => match err {
             QuoteError::TeloxideRequest(request_error) => {
@@ -384,13 +390,15 @@ async fn get_random_quote(
     msg: Message,
     bot: Bot,
 ) -> Result<(), teloxide::RequestError> {
-    match db::queries::quotes::random_quote()
+    let result = match db::queries::quotes::random_quote()
         .bind(client, &msg.chat.id.0)
         .one()
         .await
-        .map_err(std::convert::Into::<QuoteError>::into)
-        .map(|quote| send_quote(client, bot.clone(), quote, &msg))
     {
+        Ok(quote) => send_quote(client, bot.clone(), quote, &msg).await,
+        Err(err) => Err(QuoteError::from(err)),
+    };
+    match result {
         Ok(_) => Ok(()),
         Err(err) => match err {
             QuoteError::TeloxideRequest(request_error) => {
@@ -472,7 +480,7 @@ pub async fn send_quote(
                 InputFile::file_id(
                     quote
                         .file_id
-                        .ok_or(QuoteError::TGMissingFileID(msg.clone()))?,
+                        .ok_or(QuoteError::TGMissingFileID(Box::new(msg.clone())))?,
                 ),
             )
             .caption(text)
@@ -505,7 +513,7 @@ pub async fn send_quote(
                 InputFile::file_id(
                     quote
                         .file_id
-                        .ok_or(QuoteError::TGMissingFileID(msg.clone()))?,
+                        .ok_or(QuoteError::TGMissingFileID(Box::new(msg.clone())))?,
                 ),
             )
             .caption(text)
@@ -539,7 +547,7 @@ pub async fn send_quote(
                 InputFile::file_id(
                     quote
                         .file_id
-                        .ok_or(QuoteError::TGMissingFileID(msg.clone()))?,
+                        .ok_or(QuoteError::TGMissingFileID(Box::new(msg.clone())))?,
                 ),
             )
             .caption(text)
@@ -573,7 +581,7 @@ pub async fn send_quote(
                 InputFile::file_id(
                     quote
                         .file_id
-                        .ok_or(QuoteError::TGMissingFileID(msg.clone()))?,
+                        .ok_or(QuoteError::TGMissingFileID(Box::new(msg.clone())))?,
                 ),
             )
             .caption(text)

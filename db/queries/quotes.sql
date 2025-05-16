@@ -1,9 +1,3 @@
---! get_name
-SELECT
-	name
-FROM user_names
-WHERE id = (:user_id);
-
 --! add_quote (text_content?, file_id?)
 INSERT INTO 
 	quotes (msg_id, user_from, chat_id, quoted_by, msg_type, msg_date, has_spoiler, text, file_id)
@@ -113,3 +107,7 @@ WHERE chat_id = (:chat_id)
 	AND textsearchable_index_col @@ to_tsquery(:query)
 ORDER BY RANDOM()
 LIMIT 1;
+
+--! purge_quotes_for_privacy
+DELETE FROM quotes
+WHERE user_from = (:user_id) OR quoted_by = (:user_id);

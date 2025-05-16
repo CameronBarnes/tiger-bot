@@ -54,6 +54,15 @@ SET default_tablespace = '';
 SET default_table_access_method = heap;
 
 --
+-- Name: opt_out_users; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.opt_out_users (
+    user_id numeric NOT NULL
+);
+
+
+--
 -- Name: quotes; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -88,6 +97,14 @@ CREATE TABLE public.user_names (
     id numeric NOT NULL,
     name text NOT NULL
 );
+
+
+--
+-- Name: opt_out_users opt_out_users_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.opt_out_users
+    ADD CONSTRAINT opt_out_users_pkey PRIMARY KEY (user_id);
 
 
 --
@@ -153,4 +170,5 @@ ALTER TABLE ONLY public.quotes
 --
 
 INSERT INTO public.schema_migrations (version) VALUES
-    ('20250417034715');
+    ('20250417034715'),
+    ('20250515204051');

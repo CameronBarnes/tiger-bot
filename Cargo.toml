@@ -22,7 +22,10 @@ chrono = "0.4"
 cached = { version = "0.55", features = ["async", "ahash", "async_tokio_rt_multi_thread"] }
 db = { path = "./generated_db_crate", features = ["deadpool", "chrono"] }
 rust_decimal = "1.37"
+nanoid = "0.4"
+backon = "1.5"
+redis = { version = "0.31", features = ["tokio-comp", "connection-manager", "ahash", "rust_decimal"] }
 
 [build-dependencies]
-clorinde = "0.14"
+clorinde = "0.15"
 postgres = "0.19"

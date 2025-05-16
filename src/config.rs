@@ -9,6 +9,7 @@ pub struct Config {
     pub database_host: String,
     pub database_user: String,
     pub database_port: u16,
+    pub cache_host: String,
     pub url: String,
     pub port: u16,
 }
@@ -107,12 +108,23 @@ impl Config {
                 std::process::exit(1);
             }
         });
+        let cache_host = env::var("CACHE_HOST").unwrap_or_else(|err| match err {
+            env::VarError::NotPresent => {
+                info!("CACHE_HOST environment variable is not set. Defaulting to cache");
+                String::from("cache")
+            },
+            env::VarError::NotUnicode(_) => {
+                error!("CACHE_HOST is not valid unicide. Error: {err:?}");
+                std::process::exit(1);
+            },
+        });
         Self {
             database_password,
             database_port,
             database_host,
             database_user,
             database_name,
+            cache_host,
             url,
             port,
         }

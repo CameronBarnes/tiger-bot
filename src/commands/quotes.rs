@@ -14,7 +14,7 @@ use teloxide::{
 };
 use tracing::{error, warn};
 
-use crate::utils::get_username;
+use crate::utils::{get_username, is_user_opt_out};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum QuoteError {
@@ -88,11 +88,18 @@ pub async fn endpoint(
 async fn quote(client: &Object, msg: Message, bot: Bot) -> Result<(), teloxide::RequestError> {
     // The quote command needs a replied to message to quote
     let text = if let Some(quote) = msg.reply_to_message() {
-        // warn!("{quote:#?}");
         if let Some(from) = &msg.from {
             if let Some(quote_from) = &quote.from {
                 // The quote must have a valid user object and not be from a channel
-                if quote_from.is_bot {
+                // Command also must not be run by a user who has opted out, or be a quote of a
+                // user who opted out
+                if is_user_opt_out(client, from.id.0).await {
+                    String::from(
+                        "You have opted out of quote functionality. Please opt in if you wish to quote messages again.",
+                    )
+                } else if is_user_opt_out(client, quote_from.id.0).await {
+                    String::from("The user you are trying to quote has opted out.")
+                } else if quote_from.is_bot {
                     String::from("Cant quote a bot's messages.")
                 } else if quote_from.is_telegram()
                     || quote_from.is_channel()

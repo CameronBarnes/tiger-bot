@@ -7,7 +7,7 @@ use db::{
     tokio_postgres::NoTls,
 };
 use teloxide::{prelude::*, update_listeners::webhooks, utils::command::BotCommands};
-use tracing::info;
+use tracing::{debug, info};
 
 mod callbacks;
 mod commands;
@@ -21,8 +21,17 @@ pub async fn main() {
 
     info!("Hello Mom!");
 
+    info!("Loading configuration");
     let config = Config::new();
-    let pool = create_pool(&config).await.expect("Failed to connect to DB");
+    info!("Creating Database connection pool");
+    let db_pool = create_pool(&config).await.expect("Failed to connect to DB");
+    info!("Creating connection manager for cache");
+    let client = redis::Client::open(format!("redis://{}", &config.cache_host))
+        .expect("Failed to connect to cache");
+    let cache_pool = client
+        .get_connection_manager()
+        .await
+        .expect("Failed to construct cache connection manager");
 
     let bot = Bot::from_env();
 
@@ -34,7 +43,7 @@ pub async fn main() {
         )
         .await;
 
-    let handler = Update::filter_message()
+    let message_handler = Update::filter_message()
         .branch(
             dptree::entry()
                 .filter_command::<commands::GeneralCommand>()
@@ -46,6 +55,17 @@ pub async fn main() {
                 .endpoint(quotes::endpoint),
         );
 
+    let callback_handler = Update::filter_callback_query()
+        // .filter(|callback: CallbackQuery| callback.message.is_some())
+        .endpoint(callbacks::endpoint);
+
+    let handler = dptree::entry()
+        .branch(message_handler)
+        .branch(callback_handler);
+
+    info!("Created message and callback handler");
+
+    info!("Creating webhook listener");
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     let listener = webhooks::axum(
         bot.clone(),
@@ -57,10 +77,11 @@ pub async fn main() {
     .await
     .expect("Failed to setup webhook");
 
+    info!("Starting dispatcher");
     Dispatcher::builder(bot, handler)
-        .dependencies(dptree::deps![pool])
+        .dependencies(dptree::deps![db_pool, cache_pool])
         // We dont want to get warnings for the unhandled updates, as there will be a lot
-        .default_handler(async move |_| {})
+        .default_handler(async |update| debug!("Unhandled update: {update:?}"))
         .enable_ctrlc_handler()
         .build()
         .dispatch_with_listener(listener, LoggingErrorHandler::new())

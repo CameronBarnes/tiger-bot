@@ -22,11 +22,6 @@ pub async fn set_username(client: &Object, user_id: u64, username: String) {
 }
 
 pub async fn is_user_opt_out(client: &Object, user_id: u64) -> bool {
-    is_user_opt_out_inner(client, user_id).await.is_some()
-}
-
-#[cached(key = "u64", convert = r#"{ user_id }"#, option = true, time = 60)]
-async fn is_user_opt_out_inner(client: &Object, user_id: u64) -> Option<i32> {
     db::queries::user_management::is_user_opt_out()
         .bind(
             client,
@@ -34,7 +29,7 @@ async fn is_user_opt_out_inner(client: &Object, user_id: u64) -> Option<i32> {
         )
         .one()
         .await
-        .ok()
+        .is_ok()
 }
 
 #[cached(

@@ -1,12 +1,10 @@
-use std::net::SocketAddr;
-
 use commands::quotes;
 use config::Config;
 use db::{
     deadpool_postgres::{Config as DBConfig, CreatePoolError, Pool},
     tokio_postgres::NoTls,
 };
-use teloxide::{prelude::*, update_listeners::webhooks, utils::command::BotCommands};
+use teloxide::{prelude::*, utils::command::BotCommands};
 use tracing::{debug, info};
 
 mod callbacks;
@@ -65,7 +63,8 @@ pub async fn main() {
 
     info!("Created message and callback handler");
 
-    info!("Creating webhook listener");
+    // Unable to use webhook due to issue with callbacks
+    /*info!("Creating webhook listener");
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     let listener = webhooks::axum(
         bot.clone(),
@@ -75,16 +74,15 @@ pub async fn main() {
         ),
     )
     .await
-    .expect("Failed to setup webhook");
+    .expect("Failed to setup webhook");*/
 
     info!("Starting dispatcher");
     Dispatcher::builder(bot, handler)
         .dependencies(dptree::deps![db_pool, cache_pool])
-        // We dont want to get warnings for the unhandled updates, as there will be a lot
         .default_handler(async |update| debug!("Unhandled update: {update:?}"))
         .enable_ctrlc_handler()
         .build()
-        .dispatch_with_listener(listener, LoggingErrorHandler::new())
+        .dispatch()
         .await;
 }
 

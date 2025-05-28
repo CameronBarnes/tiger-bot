@@ -14,7 +14,7 @@ pub async fn endpoint(
     callback: CallbackQuery,
 ) -> Result<(), teloxide::RequestError> {
     debug!("Callback!");
-    let client = match db_pool.get().await {
+    let mut client = match db_pool.get().await {
         Ok(client) => client,
         Err(err) => {
             error!("Failed to get DB client with err: {err:?}");
@@ -74,7 +74,7 @@ pub async fn endpoint(
             }
         }
         "opt_out_yes" => {
-            let result = opt_out(&client, callback.from.id.0).await;
+            let result = opt_out(&mut client, callback.from.id.0).await;
 
             if result.is_ok() {
                 let mut request = bot.edit_reply_markup(message);
@@ -113,19 +113,20 @@ pub async fn endpoint(
     }
 }
 
-async fn opt_out(client: &Object, user_id: u64) -> Result<(), tokio_postgres::Error> {
+async fn opt_out(client: &mut Object, user_id: u64) -> Result<(), tokio_postgres::Error> {
+    let transaction = client.transaction().await?;
     let user_id = &Decimal::from_u64(user_id).expect("Failed to convert u64 to Decimal");
     db::queries::user_management::add_opt_out_user()
-        .bind(client, user_id)
-        .await?;
-    db::queries::user_management::remove_name()
-        .bind(client, user_id)
+        .bind(&transaction, user_id)
         .await?;
     db::queries::quotes::purge_quotes_for_privacy()
-        .bind(client, user_id)
+        .bind(&transaction, user_id)
+        .await?;
+    db::queries::user_management::remove_name()
+        .bind(&transaction, user_id)
         .await?;
 
-    Ok(())
+    transaction.commit().await
 }
 
 async fn opt_in(client: &Object, user_id: u64) -> Result<u64, tokio_postgres::Error> {
